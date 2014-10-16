@@ -166,19 +166,42 @@ void ProfileNode::CollectDeoptInfo(CodeEntry* entry) {
 
 
 ProfileNode* ProfileNode::FindChild(CodeEntry* entry) {
-  HashMap::Entry* map_entry = children_.Lookup(entry, CodeEntryHash(entry));
+  if (entry) {
+    StackEntry tmp_stackentry(entry, entry->line_number());
+    return ProfileNode::FindChild(&tmp_stackentry);
+  }
+  return NULL;
+}
+
+
+ProfileNode* ProfileNode::FindChild(StackEntry* stackentry) {
+  HashMap::Entry* map_entry =
+      children_.Lookup(
+          stackentry->entry,
+          CodeEntryHash(stackentry->entry) ^ stackentry->srcLine);
   return map_entry != NULL ?
       reinterpret_cast<ProfileNode*>(map_entry->value) : NULL;
 }
 
 
 ProfileNode* ProfileNode::FindOrAddChild(CodeEntry* entry) {
+  if (entry) {
+    StackEntry tmp_stackentry(entry, entry->line_number());
+    return ProfileNode::FindOrAddChild(&tmp_stackentry);
+  }
+  return NULL;
+}
+
+
+ProfileNode* ProfileNode::FindOrAddChild(StackEntry* stackentry) {
   HashMap::Entry* map_entry =
-      children_.LookupOrInsert(entry, CodeEntryHash(entry));
+      children_.LookupOrInsert(
+          stackentry->entry,
+          CodeEntryHash(stackentry->entry) ^ stackentry->srcLine);
   ProfileNode* node = reinterpret_cast<ProfileNode*>(map_entry->value);
   if (node == NULL) {
     // New node added.
-    node = new ProfileNode(tree_, entry);
+    node = new ProfileNode(tree_, stackentry->entry, stackentry->srcLine);
     map_entry->value = node;
     children_list_.Add(node);
   }
@@ -292,12 +315,25 @@ unsigned ProfileTree::GetFunctionId(const ProfileNode* node) {
 
 ProfileNode* ProfileTree::AddPathFromEnd(const std::vector<CodeEntry*>& path,
                                          int src_line, bool update_stats) {
+  if (path.empty()) return root_;
+  std::vector<StackEntry> stackentrys(path.size());
+  auto c = stackentrys.begin();
+  for (auto it = path.rbegin(); it != path.rend(); ++it) {
+      if (*it == NULL) continue;
+      c->entry = *it;
+      c->srcLine = (*it)->line_number();
+  }
+  return ProfileTree::AddPathFromEnd(stackentrys, src_line, update_stats);
+}
+
+ProfileNode* ProfileTree::AddPathFromEnd(const std::vector<StackEntry>& path,
+                                         int src_line, bool update_stats) {
   ProfileNode* node = root_;
   CodeEntry* last_entry = NULL;
   for (auto it = path.rbegin(); it != path.rend(); ++it) {
-    if (*it == NULL) continue;
-    last_entry = *it;
-    node = node->FindOrAddChild(*it);
+    if (it->entry == NULL) continue;
+    node = node->FindOrAddChild(it->entry);
+    last_entry = node->entry();
   }
   if (last_entry && last_entry->has_deopt_info()) {
     node->CollectDeoptInfo(last_entry);
@@ -369,7 +405,7 @@ CpuProfile::CpuProfile(Isolate* isolate, const char* title, bool record_samples)
       top_down_(isolate) {}
 
 void CpuProfile::AddPath(base::TimeTicks timestamp,
-                         const std::vector<CodeEntry*>& path, int src_line,
+                         const std::vector<StackEntry>& path, int src_line,
                          bool update_stats) {
   ProfileNode* top_frame_node =
       top_down_.AddPathFromEnd(path, src_line, update_stats);
@@ -538,7 +574,7 @@ void CpuProfilesCollection::RemoveProfile(CpuProfile* profile) {
 }
 
 void CpuProfilesCollection::AddPathToCurrentProfiles(
-    base::TimeTicks timestamp, const std::vector<CodeEntry*>& path,
+    base::TimeTicks timestamp, const std::vector<StackEntry>& path,
     int src_line, bool update_stats) {
   // As starting / stopping profiles is rare relatively to this
   // method, we don't bother minimizing the duration of lock holding,
@@ -589,10 +625,10 @@ ProfileGenerator::ProfileGenerator(CpuProfilesCollection* profiles)
 
 
 void ProfileGenerator::RecordTickSample(const TickSample& sample) {
-  std::vector<CodeEntry*> entries;
+  std::vector<StackEntry> stackentrys;
   // Conservatively reserve space for stack frames + pc + function + vm-state.
   // There could in fact be more of them because of inlined entries.
-  entries.reserve(sample.frames_count + 3);
+  stackentrys.reserve(sample.frames_count + 3);
 
   // The ProfileNode knows nothing about all versions of generated code for
   // the same JS function. The line number information associated with
@@ -608,7 +644,8 @@ void ProfileGenerator::RecordTickSample(const TickSample& sample) {
       // Don't use PC when in external callback code, as it can point
       // inside callback's code, and we will erroneously report
       // that a callback calls itself.
-      entries.push_back(code_map_.FindEntry(sample.external_callback_entry));
+      stackentrys.push_back(
+          StackEntry(code_map_.FindEntry(sample.external_callback_entry)));
     } else {
       CodeEntry* pc_entry = code_map_.FindEntry(sample.pc);
       // If there is no pc_entry we're likely in native code.
@@ -631,7 +668,7 @@ void ProfileGenerator::RecordTickSample(const TickSample& sample) {
           src_line = pc_entry->line_number();
         }
         src_line_not_found = false;
-        entries.push_back(pc_entry);
+        stackentrys.push_back(StackEntry(pc_entry, src_line));
 
         if (pc_entry->builtin_id() == Builtins::kFunctionPrototypeApply ||
             pc_entry->builtin_id() == Builtins::kFunctionPrototypeCall) {
@@ -642,7 +679,7 @@ void ProfileGenerator::RecordTickSample(const TickSample& sample) {
           // former case we don't so we simply replace the frame with
           // 'unresolved' entry.
           if (sample.top_frame_type == StackFrame::JAVA_SCRIPT) {
-            entries.push_back(unresolved_entry_);
+            stackentrys.push_back(StackEntry(unresolved_entry_));
           }
         }
       }
@@ -660,8 +697,9 @@ void ProfileGenerator::RecordTickSample(const TickSample& sample) {
         const std::vector<CodeEntry*>* inline_stack =
             entry->GetInlineStack(pc_offset);
         if (inline_stack) {
-          entries.insert(entries.end(), inline_stack->rbegin(),
-                         inline_stack->rend());
+          for (auto e : *inline_stack) {
+            stackentrys.push_back(StackEntry(e));
+          }
         }
         // Skip unresolved frames (e.g. internal frame) and get source line of
         // the first JS caller.
@@ -673,25 +711,25 @@ void ProfileGenerator::RecordTickSample(const TickSample& sample) {
           src_line_not_found = false;
         }
       }
-      entries.push_back(entry);
+      stackentrys.push_back(StackEntry(entry, src_line));
     }
   }
 
   if (FLAG_prof_browser_mode) {
     bool no_symbolized_entries = true;
-    for (auto e : entries) {
-      if (e != NULL) {
+    for (auto e : stackentrys) {
+      if (e.entry != NULL) {
         no_symbolized_entries = false;
         break;
       }
     }
     // If no frames were symbolized, put the VM state entry in.
     if (no_symbolized_entries) {
-      entries.push_back(EntryForVMState(sample.state));
+      stackentrys.push_back(StackEntry(EntryForVMState(sample.state)));
     }
   }
 
-  profiles_->AddPathToCurrentProfiles(sample.timestamp, entries, src_line,
+  profiles_->AddPathToCurrentProfiles(sample.timestamp, stackentrys, src_line,
                                       sample.update_stats);
 }
 
