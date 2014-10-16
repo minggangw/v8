@@ -1050,6 +1050,10 @@
         '../../src/zone-containers.h',
         '../../src/third_party/fdlibm/fdlibm.cc',
         '../../src/third_party/fdlibm/fdlibm.h',
+        '../../src/profiler/xdk-allocation.cc',
+        '../../src/profiler/xdk-allocation.h',
+        '../../src/profiler/xdk-utils.h',
+        '../../src/profiler/xdk-utils.cc',
       ],
       'conditions': [
         ['want_separate_host_toolset==1', {
