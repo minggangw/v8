@@ -812,6 +812,11 @@ void InstructionSelector::VisitFloat64RoundTiesAway(Node* node) {
 }
 
 
+void InstructionSelector::VisitFloat64RoundTiesEven(Node* node) {
+  VisitRR(this, kMips64Float64RoundTiesEven, node);
+}
+
+
 void InstructionSelector::EmitPrepareArguments(NodeVector* arguments,
                                                const CallDescriptor* descriptor,
                                                Node* node) {
@@ -1393,7 +1398,8 @@ InstructionSelector::SupportedMachineOperatorFlags() {
          MachineOperatorBuilder::kFloat32Max |
          MachineOperatorBuilder::kFloat64RoundDown |
          MachineOperatorBuilder::kFloat64RoundUp |
-         MachineOperatorBuilder::kFloat64RoundTruncate;
+         MachineOperatorBuilder::kFloat64RoundTruncate |
+         MachineOperatorBuilder::kFloat64RoundTiesEven;
 }
 
 }  // namespace compiler
