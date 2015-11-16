@@ -1115,6 +1115,11 @@ void InstructionSelector::VisitFloat64RoundDown(Node* node) {
 }
 
 
+void InstructionSelector::VisitFloat64RoundUp(Node* node) {
+  VisitRR(this, node, kSSEFloat64Round | MiscField::encode(kRoundUp));
+}
+
+
 void InstructionSelector::VisitFloat64RoundTruncate(Node* node) {
   VisitRR(this, node, kSSEFloat64Round | MiscField::encode(kRoundToZero));
 }
@@ -1654,6 +1659,7 @@ InstructionSelector::SupportedMachineOperatorFlags() {
   }
   if (CpuFeatures::IsSupported(SSE4_1)) {
     flags |= MachineOperatorBuilder::kFloat64RoundDown |
+             MachineOperatorBuilder::kFloat64RoundUp |
              MachineOperatorBuilder::kFloat64RoundTruncate;
   }
   return flags;
